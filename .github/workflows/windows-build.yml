@@ -1,0 +1,86 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Find latest stable CEF windows64 standard build
+        id: cef
+        shell: pwsh
+        run: |
+          $indexUrl = "https://cef-builds.spotifycdn.com/index.json"
+          $index = Invoke-RestMethod -Uri $indexUrl
+          $file = $null
+          foreach ($entry in $index.windows64.versions) {
+            if ($entry.channel -eq "stable") {
+              foreach ($f in $entry.files) {
+                if ($f.type -eq "standard" -and $f.name -like "*windows64*") { $file = $f.name; break }
+              }
+            }
+            if ($file) { break }
+          }
+          if (-not $file) { throw "Could not find CEF archive" }
+          $extractDirName = [System.Text.RegularExpressions.Regex]::Replace($file, '\\.tar\\.(bz2|gz|xz)$', '')
+          "archive=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "extract_dir_name=$extractDirName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Download CEF archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\_deps\cef" | Out-Null
+          $archivePath = "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.archive }}"
+          Invoke-WebRequest -Uri "https://cef-builds.spotifycdn.com/${{ steps.cef.outputs.archive }}" -OutFile $archivePath
+
+      - name: Extract CEF archive
+        shell: pwsh
+        run: |
+          tar -xf "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.archive }}" -C "$env:GITHUB_WORKSPACE\_deps\cef"
+
+      - name: Build CEF wrapper
+        shell: pwsh
+        run: |
+          $cefRoot = "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.extract_dir_name }}"
+          cmake -S $cefRoot -B "$cefRoot\build" -G "Visual Studio 17 2022" -A x64
+          cmake --build "$cefRoot\build" --target libcef_dll_wrapper --config Release
+
+      - name: Configure project
+        shell: pwsh
+        run: |
+          $cefRoot = "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.extract_dir_name }}"
+          cmake -S . -B build-win -G "Visual Studio 17 2022" -A x64 -DCEF_ROOT="$cefRoot"
+
+      - name: Build project
+        shell: pwsh
+        run: |
+          cmake --build build-win --config Release --target complexbrowser
+
+      - name: Stage runtime bundle
+        shell: pwsh
+        run: |
+          $outDir = "$env:GITHUB_WORKSPACE\dist\complexbrowser-windows-x64"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Copy-Item -Path "$env:GITHUB_WORKSPACE\build-win\Release\*" -Destination $outDir -Recurse -Force
+          Copy-Item -Path "$env:GITHUB_WORKSPACE\build-win\home.html" -Destination "$outDir\home.html" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: complexbrowser-windows-x64
+          path: dist/complexbrowser-windows-x64
+          if-no-files-found: error
