@@ -40,7 +40,15 @@ jobs:
           "archive=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "extract_dir_name=$extractDirName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Cache CEF payload
+        id: cef-cache
+        uses: actions/cache@v4
+        with:
+          path: _deps/cef
+          key: cef-windows64-${{ steps.cef.outputs.archive }}
+
       - name: Download CEF archive
+        if: steps.cef-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\_deps\cef" | Out-Null
@@ -48,9 +56,10 @@ jobs:
           Invoke-WebRequest -Uri "https://cef-builds.spotifycdn.com/${{ steps.cef.outputs.archive }}" -OutFile $archivePath
 
       - name: Extract CEF archive
+        if: steps.cef-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          tar -xf "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.archive }}" -C "$env:GITHUB_WORKSPACE\_deps\cef"
+          7z x "$env:GITHUB_WORKSPACE\_deps\cef\${{ steps.cef.outputs.archive }}" -so | 7z x -si -ttar -o"$env:GITHUB_WORKSPACE\_deps\cef" -y
 
       - name: Build CEF wrapper
         shell: pwsh
